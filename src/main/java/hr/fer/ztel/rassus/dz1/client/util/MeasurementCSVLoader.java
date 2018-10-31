@@ -1,6 +1,6 @@
-package hr.fer.ztel.rassus.dz1.util;
+package hr.fer.ztel.rassus.dz1.client.util;
 
-import hr.fer.ztel.rassus.dz1.model.Measurement;
+import hr.fer.ztel.rassus.dz1.client.model.Measurement;
 
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -15,17 +15,28 @@ import java.util.stream.Collectors;
 public class MeasurementCSVLoader {
 
     /** Name of the file from which all lines are read. */
-    private static final Path MEASUREMENTS_FILE = Paths.get("./measurements.csv");
+    private static final Path MEASUREMENTS_FILE = Paths.get("src/main/resources/measurements.csv");
+
+    /** List of measurements cached after the first load. */
+    private static List<Measurement> cachedMeasurements;
 
     /** Disable instantiation. */
     private MeasurementCSVLoader() {}
 
-    public static List<Measurement> loadMeasurements() {
+    public static List<Measurement> getMeasurements() {
+        if (cachedMeasurements == null) {
+            cachedMeasurements = loadMeasurements();
+        }
+
+        return cachedMeasurements;
+    }
+
+    private static List<Measurement> loadMeasurements() {
         try {
             return Files.lines(MEASUREMENTS_FILE, StandardCharsets.UTF_8)
                     .skip(1) // skip header
                     .filter(s -> !s.isEmpty()) // filter out empty lines
-                    .map(Measurement::parseMeasurement) // convert string to Measurement
+                    .map(Measurement::parseFromCSV) // convert string to Measurement
                     .collect(Collectors.toList());
         } catch (Exception e) {
             throw new RuntimeException("Unable to load measurements from file.", e);

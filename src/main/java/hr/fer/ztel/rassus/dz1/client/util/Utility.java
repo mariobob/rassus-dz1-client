@@ -1,4 +1,4 @@
-package hr.fer.ztel.rassus.dz1.util;
+package hr.fer.ztel.rassus.dz1.client.util;
 
 import java.util.OptionalInt;
 

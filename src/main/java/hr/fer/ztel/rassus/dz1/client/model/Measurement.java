@@ -1,10 +1,13 @@
-package hr.fer.ztel.rassus.dz1.model;
+package hr.fer.ztel.rassus.dz1.client.model;
 
-import hr.fer.ztel.rassus.dz1.util.Utility;
+import hr.fer.ztel.rassus.dz1.client.util.Utility;
+import lombok.*;
 
-import java.util.Objects;
 import java.util.OptionalInt;
 
+@Getter
+@ToString
+@EqualsAndHashCode
 public class Measurement {
 
     private final int temperature;
@@ -23,7 +26,7 @@ public class Measurement {
         this.so2 = so2;
     }
 
-    public static Measurement parseMeasurement(String s) {
+    public static Measurement parseFromCSV(String s) {
         try {
             // Split tokens and extract required parameters
             String[] tokens = s.split(",", -1);
@@ -65,34 +68,15 @@ public class Measurement {
         return builder.createMeasurement();
     }
 
-    @Override
-    public String toString() {
-        StringBuilder sb = new StringBuilder();
-        sb      .append(temperature).append(",")
+    public String serializeToCSV() {
+        return new StringBuilder()
+                .append(temperature).append(",")
                 .append(pressure).append(",")
                 .append(humidity).append(",")
                 .append(co.isPresent() ? co.getAsInt() : "").append(",")
                 .append(no2.isPresent() ? no2.getAsInt() : "").append(",")
-                .append(so2.isPresent() ? so2.getAsInt() : "").append(",");
-        return sb.toString();
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (o == null || getClass() != o.getClass()) return false;
-        Measurement that = (Measurement) o;
-        return temperature == that.temperature &&
-                pressure == that.pressure &&
-                humidity == that.humidity &&
-                Objects.equals(co, that.co) &&
-                Objects.equals(no2, that.no2) &&
-                Objects.equals(so2, that.so2);
-    }
-
-    @Override
-    public int hashCode() {
-        return Objects.hash(temperature, pressure, humidity, co, no2, so2);
+                .append(so2.isPresent() ? so2.getAsInt() : "").append(",")
+                .toString();
     }
 
     public static class Builder {
