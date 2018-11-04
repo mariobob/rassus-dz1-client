@@ -1,4 +1,4 @@
-package hr.fer.ztel.rassus.dz1.client.util;
+package hr.fer.ztel.rassus.dz1.client.loader;
 
 import hr.fer.ztel.rassus.dz1.client.model.Measurement;
 
@@ -12,18 +12,31 @@ import java.util.stream.Collectors;
 /**
  * Class for loading measurements from a CSV file on disk.
  */
-public class MeasurementCSVLoader {
+public class MeasurementCSVLoader implements MeasurementLoader {
 
     /** Name of the file from which all lines are read. */
-    private static final Path MEASUREMENTS_FILE = Paths.get("src/main/resources/measurements.csv");
+    private static final String DEFAULT_MEASUREMENTS_FILE = "src/main/resources/measurements.csv";
 
     /** List of measurements cached after the first load. */
-    private static List<Measurement> cachedMeasurements;
+    private List<Measurement> cachedMeasurements;
 
-    /** Disable instantiation. */
-    private MeasurementCSVLoader() {}
+    private Path measurementsFile;
 
-    public static List<Measurement> getMeasurements() {
+    public MeasurementCSVLoader() {
+        this(DEFAULT_MEASUREMENTS_FILE);
+    }
+
+    public MeasurementCSVLoader(String filePath) {
+        this.measurementsFile = Paths.get(filePath);
+    }
+
+    @Override
+    public Measurement getMeasurement(int index) {
+        return getMeasurements().get(index);
+    }
+
+    @Override
+    public List<Measurement> getMeasurements() {
         if (cachedMeasurements == null) {
             cachedMeasurements = loadMeasurements();
         }
@@ -31,9 +44,9 @@ public class MeasurementCSVLoader {
         return cachedMeasurements;
     }
 
-    private static List<Measurement> loadMeasurements() {
+    private List<Measurement> loadMeasurements() {
         try {
-            return Files.lines(MEASUREMENTS_FILE, StandardCharsets.UTF_8)
+            return Files.lines(measurementsFile, StandardCharsets.UTF_8)
                     .skip(1) // skip header
                     .filter(s -> !s.isEmpty()) // filter out empty lines
                     .map(Measurement::parseFromCSV) // convert string to Measurement

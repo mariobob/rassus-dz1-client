@@ -18,17 +18,18 @@ public class Sensor {
     private static final double LONGITUDE_MAX = 45.85;
 
     private final String username;
-    private final double latitude;
-    private final double longitude;
     private final String ipAddress;
     private final int port;
+    private final MapLocation location;
 
     public Sensor(String ipAddress, int port) {
         this.username = UUID.randomUUID().toString();
-        this.latitude = ThreadLocalRandom.current().nextDouble(LATITUDE_MIN, LATITUDE_MAX);
-        this.longitude = ThreadLocalRandom.current().nextDouble(LONGITUDE_MIN, LONGITUDE_MAX);
         this.ipAddress = ipAddress;
         this.port = port;
+        this.location = new MapLocation(
+                ThreadLocalRandom.current().nextDouble(LATITUDE_MIN, LATITUDE_MAX),
+                ThreadLocalRandom.current().nextDouble(LONGITUDE_MIN, LONGITUDE_MAX)
+        );
     }
 
 }
