@@ -20,6 +20,8 @@ import java.net.SocketTimeoutException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import static hr.fer.ztel.rassus.dz1.client.util.Utility.GET_MEASUREMENT_KEYWORD;
+
 /**
  * Server of a single sensor client that serves
  * other sensor clients measurement data.
@@ -88,20 +90,29 @@ public class ServerThread extends Thread {
 
         @Override
         public void run() {
-            log.info("Serving {}", clientSocket);
             try {
                 BufferedReader in = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 PrintWriter out = new PrintWriter(new OutputStreamWriter(clientSocket.getOutputStream()), true);
 
-                int secondsActive = Math.toIntExact((System.currentTimeMillis() - startTime) / 1000);
-                Measurement measurement = Loaders.getMeasurementLoader().getMeasurement(secondsActive % 100);
+                // Loop worker and wait until another client asks for measurements
+                while (!isInterrupted()) {
+                    String line = in.readLine();
+                    if (line == null) break;
+                    if (!line.equals(GET_MEASUREMENT_KEYWORD)) continue;
+                    log.info("Serving {}", clientSocket);
 
-                Gson gson = new Gson();
-                String json = gson.toJson(measurement);
+                    int secondsActive = Math.toIntExact((System.currentTimeMillis() - startTime) / 1000);
+                    Measurement measurement = Loaders.getMeasurementLoader().getMeasurement(secondsActive % 100);
 
-                out.println(json);
+                    Gson gson = new Gson();
+                    String json = gson.toJson(measurement);
+
+                    out.println(json);
+                }
             } catch (Exception e) {
                 throw new RuntimeException(e);
+            } finally {
+                log.info("Finished serving {}", clientSocket);
             }
         }
     }

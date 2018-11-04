@@ -6,6 +6,9 @@ import java.net.SocketException;
 
 public class Utility {
 
+    /** Keyword used between two sensor clients to obtain a measurement over the network. */
+    public static final String GET_MEASUREMENT_KEYWORD = "GET_MEASUREMENT";
+
     /** Disable instantiation. */
     private Utility() {}
 

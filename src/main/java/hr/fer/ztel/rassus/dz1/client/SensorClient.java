@@ -6,6 +6,7 @@ import hr.fer.ztel.rassus.dz1.client.model.Measurement;
 import hr.fer.ztel.rassus.dz1.client.model.Sensor;
 import hr.fer.ztel.rassus.dz1.client.thread.ServerThread;
 import hr.fer.ztel.rassus.dz1.client.util.Cache;
+import hr.fer.ztel.rassus.dz1.client.util.Utility;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.ToString;
@@ -41,6 +42,9 @@ public class SensorClient {
     /** Closest sensor that is cached temporarily. */
     @ToString.Exclude @EqualsAndHashCode.Exclude
     private Cache<Sensor> cachedClosestSensor;
+    /** Socket of the closest sensor that is cached temporarily. */
+    @ToString.Exclude @EqualsAndHashCode.Exclude
+    private Cache<Socket> cachedClosestSensorSocket;
     /** Server thread of this sensor, used for serving other sensors. */
     @ToString.Exclude @EqualsAndHashCode.Exclude
     private final ServerThread serverThread;
@@ -151,17 +155,43 @@ public class SensorClient {
         return postJson(measurement, webpageUrl);
     }
 
+    /**
+     * Method that fetches a measurement from <tt>otherSensor</tt> and calculates
+     * and returns the average value for all attributes of a measurement.
+     *
+     * @param otherSensor sensor whose measurement is to be fetched
+     * @param measurement measurement of this sensor to make an average from
+     * @return the average measurement between this sensor and other sensor
+     * @throws IOException in client communication error occurs
+     */
     private Measurement getAverageMeasurement(Sensor otherSensor, Measurement measurement) throws IOException {
-        try (Socket socket = new Socket(otherSensor.getIpAddress(), otherSensor.getPort())) {
-            PrintWriter out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
-            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
-
-            String json = in.readLine();
-            Gson gson = new Gson();
-            Measurement otherMeasurement = gson.fromJson(json, Measurement.class);
-
-            return Measurement.average(measurement, otherMeasurement);
+        Socket socket;
+        if (cachedClosestSensorSocket != null && !cachedClosestSensorSocket.isExpired()) {
+            // Use cached sensor socket, if exists and is not expired
+            socket = cachedClosestSensorSocket.get();
+        } else {
+            // Create a new socket and cache it
+            socket = new Socket(otherSensor.getIpAddress(), otherSensor.getPort());
+            cachedClosestSensorSocket = new Cache<>(socket, MAX_CACHE_SECONDS);
+            cachedClosestSensorSocket.onExpiration(() -> {
+                log.info("Closing connection with sensor: {}", otherSensor.getUsername());
+                try { socket.close(); } catch (Exception e) {}
+            });
         }
+
+        // Initialize input and output
+        PrintWriter out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
+        BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+
+        // Signalize the need of a measurement
+        out.println(Utility.GET_MEASUREMENT_KEYWORD);
+
+        // Obtain the measurement and convert from json
+        String json = in.readLine();
+        Gson gson = new Gson();
+        Measurement otherMeasurement = gson.fromJson(json, Measurement.class);
+
+        return Measurement.average(measurement, otherMeasurement);
     }
 
     private Sensor getClosestSensor() throws IOException {
