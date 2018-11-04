@@ -99,7 +99,7 @@ public class ServerThread extends Thread {
                 Gson gson = new Gson();
                 String json = gson.toJson(measurement);
 
-                out.print(json);
+                out.println(json);
             } catch (Exception e) {
                 throw new RuntimeException(e);
             }

@@ -5,6 +5,7 @@ import hr.fer.ztel.rassus.dz1.client.loader.Loaders;
 import hr.fer.ztel.rassus.dz1.client.model.Measurement;
 import hr.fer.ztel.rassus.dz1.client.model.Sensor;
 import hr.fer.ztel.rassus.dz1.client.thread.ServerThread;
+import hr.fer.ztel.rassus.dz1.client.util.Cache;
 import hr.fer.ztel.rassus.dz1.client.util.Utility;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
@@ -37,14 +38,18 @@ public class SensorClient {
 
     private static final String SERVER_URL = "http://%s:%d/measurements/rest/sensors/";
     private static final long AUTO_MEASURE_SLEEP_MILLIS = 5000;
+    private static final long MAX_CACHE_SECONDS = 24;
 
     private static final String DEFAULT_SENSOR_IP_ADDRESS = "localhost";
     private static int DEFAULT_SENSOR_PORT = 10000;
     private static final String DEFAULT_SERVER_IP_ADDRESS = "localhost";
     private static final int DEFAULT_SERVER_PORT = 8080;
 
-    @ToString.Exclude
+    @ToString.Exclude @EqualsAndHashCode.Exclude
+    private Cache<Sensor> cachedClosestSensor;
+    @ToString.Exclude @EqualsAndHashCode.Exclude
     private final ServerThread serverThread;
+
     private final Sensor sensor;
     private final String serverIpAddress;
     private final int serverPort;
@@ -99,7 +104,7 @@ public class SensorClient {
             log.info("There is no neighbouring sensor. Sending generated measurement...");
         } else {
             log.info("Found closest sensor: {}", closestSensor.getUsername());
-            measurement = getAverageMeasurement(sensor, measurement);
+            measurement = getAverageMeasurement(closestSensor, measurement);
         }
 
         // Loop until measurement is successfully sent
@@ -127,9 +132,17 @@ public class SensorClient {
     }
 
     private Sensor getClosestSensor() throws IOException {
-        String webpageUrl = SERVER_URL + sensor.getUsername() + "/closest";
+        // First try to obtain closest sensor from cache
+        if (cachedClosestSensor != null && !cachedClosestSensor.isExpired()) {
+            log.info("Obtaining closest sensor from cache...");
+            return cachedClosestSensor.get();
+        }
+
+        // If cached sensor does not exist or is expired, ask the server
+        String webpageUrl = String.format(SERVER_URL, serverIpAddress, serverPort) + sensor.getUsername() + "/closest";
+        log.info("Asking server to return closest sensor at {}", webpageUrl);
         try (CloseableHttpClient client = HttpClientBuilder.create().build()) {
-            HttpGet httpGet = new HttpGet(String.format(webpageUrl, serverIpAddress, serverPort));
+            HttpGet httpGet = new HttpGet(webpageUrl);
             HttpEntity response = client.execute(httpGet).getEntity();
 
             String json = EntityUtils.toString(response, StandardCharsets.UTF_8);
@@ -139,6 +152,7 @@ public class SensorClient {
 
             Gson gson = new Gson();
             Sensor sensor = gson.fromJson(json, Sensor.class);
+            cachedClosestSensor = new Cache<>(sensor, MAX_CACHE_SECONDS);
             return sensor;
         }
     }
@@ -177,7 +191,7 @@ public class SensorClient {
         String serverIpAddress = args.length >= 3 ? args[2]                   : DEFAULT_SERVER_IP_ADDRESS;
         int serverPort         = args.length >= 4 ? Integer.parseInt(args[3]) : DEFAULT_SERVER_PORT;
 
-
+        // If specified port is in use, increment it by 1
         while (Utility.isPortInUse(ipAddress, port)) {
             log.warn("Port {} is unavailable, incrementing to {}...", port, port+1);
             port++;
@@ -229,6 +243,7 @@ l:
 
                     case "START":
                         if (!measuringThread.isAlive()) measuringThread.start();
+                        break;
 
                     case "STOP":
                         measuringThread.interrupt();
@@ -237,12 +252,6 @@ l:
                     case "END":
                         client.shutdown();
                         break l;
-
-                    case "AUTO":
-                        System.out.print("n = ");
-                        int n = Integer.parseInt(reader.readLine().trim());
-                        autoMeasure(client, n);
-                        break;
 
                     default:
                         System.out.println("Unknown command: " + command);
@@ -259,13 +268,6 @@ l:
             try { client.deregisterFromServer(); } catch (Exception ignorable) {}
             throw e;
         }
-    }
-
-    private static void autoMeasure(SensorClient client, int times) throws IOException {
-        for (int i = 0; i < times; i++) {
-            client.measure();
-        }
-        log.info("Successfully sent {} measurements", times);
     }
 
 }
