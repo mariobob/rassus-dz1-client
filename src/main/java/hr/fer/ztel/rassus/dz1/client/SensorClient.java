@@ -174,24 +174,29 @@ public class SensorClient {
             socket = new Socket(otherSensor.getIpAddress(), otherSensor.getPort());
             cachedClosestSensorSocket = new Cache<>(socket, MAX_CACHE_SECONDS);
             cachedClosestSensorSocket.onExpiration(() -> {
-                log.info("Closing connection with sensor: {}", otherSensor.getUsername());
-                try { socket.close(); } catch (Exception e) {}
+                synchronized (socket) {
+                    log.info("Closing connection with sensor: {}", otherSensor.getUsername());
+                    try { socket.close(); } catch (Exception e) {}
+                }
             });
         }
 
-        // Initialize input and output
-        PrintWriter out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
-        BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
+        // Lock socket until measurement fetching is finished
+        synchronized (socket) {
+            // Initialize input and output
+            PrintWriter out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
+            BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
 
-        // Signalize the need of a measurement
-        out.println(Utility.GET_MEASUREMENT_KEYWORD);
+            // Signalize the need of a measurement
+            out.println(Utility.GET_MEASUREMENT_KEYWORD);
 
-        // Obtain the measurement and convert from json
-        String json = in.readLine();
-        Gson gson = new Gson();
-        Measurement otherMeasurement = gson.fromJson(json, Measurement.class);
+            // Obtain the measurement and convert from json
+            String json = in.readLine();
+            Gson gson = new Gson();
+            Measurement otherMeasurement = gson.fromJson(json, Measurement.class);
 
-        return Measurement.average(measurement, otherMeasurement);
+            return Measurement.average(measurement, otherMeasurement);
+        }
     }
 
     private Sensor getClosestSensor() throws IOException {
