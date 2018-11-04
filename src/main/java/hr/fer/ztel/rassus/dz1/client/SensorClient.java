@@ -6,7 +6,6 @@ import hr.fer.ztel.rassus.dz1.client.model.Measurement;
 import hr.fer.ztel.rassus.dz1.client.model.Sensor;
 import hr.fer.ztel.rassus.dz1.client.thread.ServerThread;
 import hr.fer.ztel.rassus.dz1.client.util.Cache;
-import hr.fer.ztel.rassus.dz1.client.util.Utility;
 import lombok.EqualsAndHashCode;
 import lombok.Getter;
 import lombok.ToString;
@@ -31,28 +30,45 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
 @Log4j2
-@Getter
 @ToString
 @EqualsAndHashCode
 public class SensorClient {
 
-    private static final String SERVER_URL = "http://%s:%d/measurements/rest/sensors/";
+    private static final String SERVER_URL = "http://%s:%d/measurementhost/rest/sensors/";
     private static final long AUTO_MEASURE_SLEEP_MILLIS = 5000;
     private static final long MAX_CACHE_SECONDS = 24;
 
-    private static final String DEFAULT_SENSOR_IP_ADDRESS = "localhost";
-    private static int DEFAULT_SENSOR_PORT = 10000;
-    private static final String DEFAULT_SERVER_IP_ADDRESS = "localhost";
-    private static final int DEFAULT_SERVER_PORT = 8080;
-
+    /** Closest sensor that is cached temporarily. */
     @ToString.Exclude @EqualsAndHashCode.Exclude
     private Cache<Sensor> cachedClosestSensor;
+    /** Server thread of this sensor, used for serving other sensors. */
     @ToString.Exclude @EqualsAndHashCode.Exclude
     private final ServerThread serverThread;
 
-    private final Sensor sensor;
-    private final String serverIpAddress;
-    private final int serverPort;
+    /** Thread that runs the measurement process in a loop. */
+    @ToString.Exclude @EqualsAndHashCode.Exclude
+    private final Thread measurementThread = new Thread("MeasuringThread") {
+        @Override
+        public void run() {
+            while (!isInterrupted()) {
+                try { measure(); } catch (HttpHostConnectException e) {
+                    log.warn("Lost connection with server. Shutting down client...");
+                    shutdown();
+                    break;
+                } catch (IOException e) {
+                    log.warn("An IOException occurred", e);
+                    break;
+                }
+                // Sleep until the new measurement cycle
+                try { Thread.sleep(AUTO_MEASURE_SLEEP_MILLIS); } catch (InterruptedException e) { interrupt(); }
+            }
+        }
+    };
+
+    @Getter private boolean registeredToServer = false;
+    @Getter private final Sensor sensor;
+    @Getter private final String serverIpAddress;
+    @Getter private final int serverPort;
 
     public SensorClient(String ipAddress, int port, String serverIpAddress, int serverPort) {
         this.serverThread = new ServerThread(ipAddress, port);
@@ -62,13 +78,29 @@ public class SensorClient {
     }
 
     public boolean registerToServer() throws IOException {
-        log.info("Client: {}", this);
-        log.info("Registering sensor client to server {}: {}", serverIpAddress, sensor.getUsername());
-        return postJson(sensor, SERVER_URL);
+        if (registeredToServer) {
+            log.warn("Client already registered to server: {}:{}", serverIpAddress, serverPort);
+            return false;
+        }
+
+        log.info("Registering sensor client to server {}:{}: {}", serverIpAddress, serverPort, sensor.getUsername());
+        registeredToServer = postJson(sensor, SERVER_URL);
+        if (registeredToServer) {
+            log.info("Starting local server for other sensors at {}:{}", sensor.getIpAddress(), sensor.getPort());
+            serverThread.setDaemon(true);
+            serverThread.start();
+        }
+
+        return registeredToServer;
     }
 
     public void deregisterFromServer() throws IOException {
-        log.info("Deregistering client from server {}: {}", serverIpAddress, sensor.getUsername());
+        if (!isRegisteredToServer()) {
+            log.warn("Client is not registered to server");
+            return;
+        }
+
+        log.info("Deregistering sensor client from server {}: {}", serverIpAddress, sensor.getUsername());
 
         String webpageUrl = SERVER_URL + sensor.getUsername();
         try (CloseableHttpClient client = HttpClientBuilder.create().build()) {
@@ -77,16 +109,17 @@ public class SensorClient {
             // Loop until client is successfully deleted
             while (client.execute(httpDelete).getStatusLine().getStatusCode() != 200) {
             }
+        } finally {
+            serverThread.interrupt();
         }
 
         log.info("Successfully deregistered sensor");
     }
 
-    public void shutdown() throws IOException {
+    public void shutdown() {
         log.info("Shutting down client for sensor: {}", sensor.getUsername());
-        deregisterFromServer();
-        serverThread.interrupt();
-        log.info("Successfully down client for sensor");
+        try { deregisterFromServer(); } catch (IOException connectionClosed) {}
+        log.info("Successfully shut down sensor client");
     }
 
     public void measure() throws IOException {
@@ -181,93 +214,43 @@ public class SensorClient {
     }
 
     /**
-     * Client program entry point.
-     *
-     * @param args sensor IP, sensor port, server IP, server port
+     * Starts the client measurement loop in a new thread and
+     * runs measurements every n seconds.
      */
-    public static void main(String[] args) throws IOException {
-        String ipAddress       = args.length >= 1 ? args[0]                   : DEFAULT_SENSOR_IP_ADDRESS;
-        int port               = args.length >= 2 ? Integer.parseInt(args[1]) : DEFAULT_SENSOR_PORT;
-        String serverIpAddress = args.length >= 3 ? args[2]                   : DEFAULT_SERVER_IP_ADDRESS;
-        int serverPort         = args.length >= 4 ? Integer.parseInt(args[3]) : DEFAULT_SERVER_PORT;
-
-        // If specified port is in use, increment it by 1
-        while (Utility.isPortInUse(ipAddress, port)) {
-            log.warn("Port {} is unavailable, incrementing to {}...", port, port+1);
-            port++;
-        }
-
-        SensorClient client;
-        try {
-            // Loop until client is successfully registered to server
-            client = new SensorClient(ipAddress, port, serverIpAddress, serverPort);
-            while (!client.registerToServer()) {
-            }
-
-            log.info("Starting local server for other sensors...");
-            client.getServerThread().setDaemon(true);
-            client.getServerThread().start();
-        } catch (Exception e) {
-            log.error("Could not initialize sensor client.", e);
+    public void startClientLoop() {
+        log.info("Starting client measurement loop...");
+        if (!isRegisteredToServer()) {
+            log.warn("Client is not registered to server");
             return;
         }
 
-        System.out.println("Welcome to sensor management interface of sensor " + client.getSensor().getUsername());
-        System.out.println("Enter a command or 'END' to shutdown sensor.");
-
-        // Thread for automatic measurement
-        Thread measuringThread = new Thread() {
-            @Override
-            public void run() {
-                while (!isInterrupted()) {
-                    try { client.measure(); } catch (IOException e) {}
-                    try { Thread.sleep(AUTO_MEASURE_SLEEP_MILLIS); } catch (InterruptedException e) { interrupt(); }
-                }
-            }
-        };
-
-        try {
-            BufferedReader reader = new BufferedReader(new InputStreamReader(System.in, StandardCharsets.UTF_8));
-l:
-            while (true) {
-                System.out.print("> ");
-
-                String command = reader.readLine();
-                if (command == null) break;
-                if (command.trim().isEmpty()) continue;
-
-                switch (command.toUpperCase()) {
-                    case "MEASURE":
-                        client.measure();
-                        break;
-
-                    case "START":
-                        if (!measuringThread.isAlive()) measuringThread.start();
-                        break;
-
-                    case "STOP":
-                        measuringThread.interrupt();
-                        break;
-
-                    case "END":
-                        client.shutdown();
-                        break l;
-
-                    default:
-                        System.out.println("Unknown command: " + command);
-                }
-            }
-
-            reader.close();
-            System.out.println("Sensor client has shut down. Goodbye!");
-        } catch (HttpHostConnectException e) {
-            System.out.println("Lost connection with server. Shutting down client.");
-            throw e;
-        } catch (Exception e) {
-            System.out.println("A critical error occurred... shutting down client.");
-            try { client.deregisterFromServer(); } catch (Exception ignorable) {}
-            throw e;
+        if (isClientLoopRunning()) {
+            log.warn("Client loop is already running");
+            return;
         }
+
+        measurementThread.start();
+    }
+
+    /**
+     * Stops the client measurement loop, if it is running.
+     */
+    public void stopClientLoop() {
+        if (!isClientLoopRunning()) {
+            log.warn("Client loop is not running");
+            return;
+        }
+
+        measurementThread.interrupt();
+    }
+
+    /**
+     * Returns true if the client measurement loop is running, false otherwise.
+     *
+     * @return true if the client measurement loop is running, false otherwise
+     */
+    public boolean isClientLoopRunning() {
+        return measurementThread.isAlive();
     }
 
 }

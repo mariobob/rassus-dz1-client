@@ -12,10 +12,10 @@ import java.util.concurrent.ThreadLocalRandom;
 @EqualsAndHashCode
 public class Sensor {
 
-    private static final double LATITUDE_MIN = 15.87;
-    private static final double LATITUDE_MAX = 16.00;
-    private static final double LONGITUDE_MIN = 45.75;
-    private static final double LONGITUDE_MAX = 45.85;
+    private static final double LATITUDE_MIN = 45.75;
+    private static final double LATITUDE_MAX = 45.85;
+    private static final double LONGITUDE_MIN = 15.87;
+    private static final double LONGITUDE_MAX = 16.00;
 
     private final String username;
     private final String ipAddress;
