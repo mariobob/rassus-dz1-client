@@ -49,7 +49,7 @@ public class SensorClientConsole {
 
         // Print out the welcome text
         System.out.println("Welcome to sensor management interface of sensor " + client.getSensor().getUsername());
-        System.out.println("Enter a command or 'END' to shutdown sensor.");
+        System.out.println("Enter a command or 'EXIT' to shutdown sensor.");
 
         // Start the command prompt, listen for user input and loop through it
         try {
@@ -85,7 +85,7 @@ public class SensorClientConsole {
             }
 
             reader.close();
-            System.out.println("Sensor client has shut down. Goodbye!");
+            System.out.println("Sensor client console has shut down. Goodbye!");
         } catch (HttpHostConnectException e) {
             System.out.println("Lost connection with server. Shutting down client.");
             throw e;

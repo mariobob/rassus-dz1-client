@@ -1,6 +1,7 @@
 package hr.fer.ztel.rassus.dz1.client;
 
 import com.google.gson.Gson;
+import com.google.gson.JsonSyntaxException;
 import hr.fer.ztel.rassus.dz1.client.loader.Loaders;
 import hr.fer.ztel.rassus.dz1.client.model.Measurement;
 import hr.fer.ztel.rassus.dz1.client.model.Sensor;
@@ -29,56 +30,66 @@ import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 
 @Log4j2
-@ToString
-@EqualsAndHashCode
+@ToString(onlyExplicitlyIncluded = true)
+@EqualsAndHashCode(onlyExplicitlyIncluded = true)
 public class SensorClient {
 
+    /** Fixed URL format string. */
     private static final String SERVER_URL = "http://%s:%d/measurementhost/rest/sensors/";
+    /** Interval between two automatic measurements, in milliseconds. */
     private static final long AUTO_MEASURE_SLEEP_MILLIS = 5000;
+    /** Maximum amount of time to keep cached instances, in seconds. */
     private static final long MAX_CACHE_SECONDS = 24;
+    /** Maximum number of attempts when retrying a task. */
+    private static final int RETRY_LOGIC_ATTEMPTS = 3;
 
-    /** Closest sensor that is cached temporarily. */
-    @ToString.Exclude @EqualsAndHashCode.Exclude
-    private Cache<Sensor> cachedClosestSensor;
-    /** Socket of the closest sensor that is cached temporarily. */
-    @ToString.Exclude @EqualsAndHashCode.Exclude
-    private Cache<Socket> cachedClosestSensorSocket;
     /** Server thread of this sensor, used for serving other sensors. */
-    @ToString.Exclude @EqualsAndHashCode.Exclude
-    private final ServerThread serverThread;
-
+    private final transient ServerThread serverThread;
     /** Thread that runs the measurement process in a loop. */
-    @ToString.Exclude @EqualsAndHashCode.Exclude
-    private final Thread measurementThread = new Thread("MeasuringThread") {
-        @Override
-        public void run() {
-            while (!isInterrupted()) {
-                try { measure(); } catch (HttpHostConnectException e) {
-                    log.warn("Lost connection with server. Shutting down client...");
-                    shutdown();
-                    break;
-                } catch (IOException e) {
-                    log.warn("An IOException occurred", e);
-                    break;
-                }
-                // Sleep until the new measurement cycle
-                try { Thread.sleep(AUTO_MEASURE_SLEEP_MILLIS); } catch (InterruptedException e) { interrupt(); }
+    private transient Thread measurementThread;
+    /** Runnable job that runs the measurement process in a loop. */
+    private final transient Runnable measurementJob = () -> {
+        while (!Thread.currentThread().isInterrupted()) {
+            try {
+                measure();
+            } catch (HttpHostConnectException e) {
+                log.warn("Lost connection with server. Shutting down client...");
+                shutdown();
+                break;
+            } catch (IOException e) {
+                log.warn("An IOException occurred", e);
+                stopClientLoop();
+                break;
             }
+            // Sleep until the new measurement cycle
+            try { Thread.sleep(AUTO_MEASURE_SLEEP_MILLIS); }
+            catch (InterruptedException e) { Thread.currentThread().interrupt(); }
         }
     };
 
-    @Getter private boolean registeredToServer = false;
-    @Getter private final Sensor sensor;
-    @Getter private final String serverIpAddress;
-    @Getter private final int serverPort;
+    /** Closest sensor that is cached temporarily. */
+    private transient Cache<Sensor> cachedClosestSensor;
+    /** Socket of the closest sensor that is cached temporarily. */
+    private transient Cache<Socket> cachedClosestSensorSocket;
+    /** Scheduled executor service for clearing cached connections on expiration. */
+    private final transient ScheduledExecutorService cacheExecutorService;
+
+    @Getter @ToString.Include @EqualsAndHashCode.Include private boolean registeredToServer = false;
+    @Getter @ToString.Include @EqualsAndHashCode.Include private final Sensor sensor;
+    @Getter @ToString.Include @EqualsAndHashCode.Include private final String serverIpAddress;
+    @Getter @ToString.Include @EqualsAndHashCode.Include private final int serverPort;
 
     public SensorClient(String ipAddress, int port, String serverIpAddress, int serverPort) {
-        this.serverThread = new ServerThread(ipAddress, port);
         this.sensor = new Sensor(ipAddress, port);
         this.serverIpAddress = serverIpAddress;
         this.serverPort = serverPort;
+
+        this.serverThread = new ServerThread(ipAddress, port);
+        this.cacheExecutorService = Executors.newSingleThreadScheduledExecutor();
     }
 
     public boolean registerToServer() throws IOException {
@@ -110,9 +121,9 @@ public class SensorClient {
         try (CloseableHttpClient client = HttpClientBuilder.create().build()) {
             HttpDelete httpDelete = new HttpDelete(String.format(webpageUrl, serverIpAddress, serverPort));
 
-            // Loop until client is successfully deleted
-            while (client.execute(httpDelete).getStatusLine().getStatusCode() != 200) {
-            }
+            final int statusCode = client.execute(httpDelete).getStatusLine().getStatusCode();
+            // Loop n times until client is successfully deleted
+            Utility.retry(RETRY_LOGIC_ATTEMPTS, () -> statusCode == 200);
         } finally {
             serverThread.interrupt();
         }
@@ -122,6 +133,8 @@ public class SensorClient {
 
     public void shutdown() {
         log.info("Shutting down client for sensor: {}", sensor.getUsername());
+        cacheExecutorService.shutdown();
+        stopClientLoop();
         try { deregisterFromServer(); } catch (IOException connectionClosed) {}
         log.info("Successfully shut down sensor client");
     }
@@ -137,16 +150,17 @@ public class SensorClient {
 
         // Find closest sensor (and make average)
         Sensor closestSensor = getClosestSensor();
+        final Measurement avgMeasurement;
         if (closestSensor == null) {
             log.info("There is no neighbouring sensor. Sending generated measurement...");
+            avgMeasurement = measurement;
         } else {
             log.info("Found closest sensor: {}", closestSensor.getUsername());
-            measurement = getAverageMeasurement(closestSensor, measurement);
+            avgMeasurement = getAverageMeasurement(closestSensor, measurement);
         }
 
-        // Loop until measurement is successfully sent
-        while (!sendMeasurement(measurement)) {
-        }
+        // Loop n times until measurement is successfully sent
+        Utility.retry(RETRY_LOGIC_ATTEMPTS, () -> sendMeasurement(avgMeasurement));
     }
 
     private boolean sendMeasurement(Measurement measurement) throws IOException {
@@ -164,16 +178,21 @@ public class SensorClient {
      * @return the average measurement between this sensor and other sensor
      * @throws IOException in client communication error occurs
      */
-    private Measurement getAverageMeasurement(Sensor otherSensor, Measurement measurement) throws IOException {
+    private Measurement getAverageMeasurement(Sensor otherSensor, Measurement measurement) {
         Socket socket;
         if (cachedClosestSensorSocket != null && !cachedClosestSensorSocket.isExpired()) {
             // Use cached sensor socket, if exists and is not expired
             socket = cachedClosestSensorSocket.get();
         } else {
             // Create a new socket and cache it
-            socket = new Socket(otherSensor.getIpAddress(), otherSensor.getPort());
+            try {
+                socket = new Socket(otherSensor.getIpAddress(), otherSensor.getPort());
+            } catch (IOException e) {
+                log.warn("Unable to connect to {}", otherSensor);
+                return measurement;
+            }
             cachedClosestSensorSocket = new Cache<>(socket, MAX_CACHE_SECONDS);
-            cachedClosestSensorSocket.onExpiration(() -> {
+            cachedClosestSensorSocket.onExpiration(cacheExecutorService, () -> {
                 synchronized (socket) {
                     log.info("Closing connection with sensor: {}", otherSensor.getUsername());
                     try { socket.close(); } catch (Exception e) {}
@@ -182,7 +201,7 @@ public class SensorClient {
         }
 
         // Lock socket until measurement fetching is finished
-        synchronized (socket) {
+        try { synchronized (socket) {
             // Initialize input and output
             PrintWriter out = new PrintWriter(new OutputStreamWriter(socket.getOutputStream()), true);
             BufferedReader in = new BufferedReader(new InputStreamReader(socket.getInputStream()));
@@ -196,6 +215,9 @@ public class SensorClient {
             Measurement otherMeasurement = gson.fromJson(json, Measurement.class);
 
             return Measurement.average(measurement, otherMeasurement);
+        } } catch (IOException e) {
+            log.error("Connection error", e);
+            return measurement;
         }
     }
 
@@ -222,6 +244,9 @@ public class SensorClient {
             Sensor sensor = gson.fromJson(json, Sensor.class);
             cachedClosestSensor = new Cache<>(sensor, MAX_CACHE_SECONDS);
             return sensor;
+        } catch (JsonSyntaxException e) {
+            log.error("Malformed json syntax", e);
+            return null;
         }
     }
 
@@ -264,6 +289,7 @@ public class SensorClient {
             return;
         }
 
+        measurementThread = new Thread(measurementJob, "MeasuringThread");
         measurementThread.start();
     }
 
@@ -271,6 +297,7 @@ public class SensorClient {
      * Stops the client measurement loop, if it is running.
      */
     public void stopClientLoop() {
+        log.info("Stopping client measurement loop...");
         if (!isClientLoopRunning()) {
             log.warn("Client loop is not running");
             return;
@@ -285,7 +312,7 @@ public class SensorClient {
      * @return true if the client measurement loop is running, false otherwise
      */
     public boolean isClientLoopRunning() {
-        return measurementThread.isAlive();
+        return measurementThread != null && measurementThread.isAlive();
     }
 
 }

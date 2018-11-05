@@ -5,7 +5,6 @@ import lombok.ToString;
 
 import java.time.LocalDateTime;
 import java.time.temporal.ChronoUnit;
-import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
@@ -21,9 +20,6 @@ public class Cache<V> {
 
     /** Default maximum age of a cache element, in seconds. */
     private static final int DEFAULT_MAX_AGE = 30;
-
-    /** Scheduled executor service for running jobs on expiration. */
-    private ScheduledExecutorService executorService;
 
     /** Value of this cache. */
     private final V value;
@@ -76,20 +72,12 @@ public class Cache<V> {
         return expirationTime;
     }
 
-    public void onExpiration(Runnable runnable) {
-        initializeExecutorService();
-
+    public void onExpiration(ScheduledExecutorService executor, Runnable runnable) {
         long millis = LocalDateTime.now().until(expirationTime, ChronoUnit.MILLIS);
         if (millis < 0) {
             millis = 0;
         }
 
-        executorService.schedule(runnable, millis, TimeUnit.MILLISECONDS);
-    }
-
-    private void initializeExecutorService() {
-        if (executorService == null) {
-            executorService = Executors.newSingleThreadScheduledExecutor();
-        }
+        executor.schedule(runnable, millis, TimeUnit.MILLISECONDS);
     }
 }

@@ -29,18 +29,18 @@ import static hr.fer.ztel.rassus.dz1.client.util.Utility.GET_MEASUREMENT_KEYWORD
  * @author Mario Bobic
  */
 @Log4j2
-@Getter
 @ToString
 @RequiredArgsConstructor
 public class ServerThread extends Thread {
 
+    @ToString.Exclude
     private final transient ExecutorService threadPool = Executors.newFixedThreadPool(
             Runtime.getRuntime().availableProcessors() - 1
     );
 
-    private final long startTime = System.currentTimeMillis();
-    private final String ipAddress;
-    private final int port;
+    @Getter private final long startTime = System.currentTimeMillis();
+    @Getter private final String ipAddress;
+    @Getter private final int port;
 
     @Override
     public void run() {
@@ -48,7 +48,7 @@ public class ServerThread extends Thread {
             serverSocket.bind(new InetSocketAddress(ipAddress, port));
             serverSocket.setSoTimeout(1000);
 
-            while (!isInterrupted()) {
+            while (!Thread.currentThread().isInterrupted()) {
                 try {
                     acceptClient(serverSocket);
                 } catch (SocketTimeoutException e) {
@@ -95,7 +95,7 @@ public class ServerThread extends Thread {
                 PrintWriter out = new PrintWriter(new OutputStreamWriter(clientSocket.getOutputStream()), true);
 
                 // Loop worker and wait until another client asks for measurements
-                while (!isInterrupted()) {
+                while (!Thread.currentThread().isInterrupted()) {
                     String line = in.readLine();
                     if (line == null) break;
                     if (!line.equals(GET_MEASUREMENT_KEYWORD)) continue;

@@ -3,11 +3,14 @@ package hr.fer.ztel.rassus.dz1.client.util;
 import java.io.IOException;
 import java.net.Socket;
 import java.net.SocketException;
+import java.util.concurrent.Callable;
 
 public class Utility {
 
     /** Keyword used between two sensor clients to obtain a measurement over the network. */
     public static final String GET_MEASUREMENT_KEYWORD = "GET_MEASUREMENT";
+    /** Sleep time for retry logic, in milliseconds. */
+    private static final long RETRY_LOGIC_SLEEP_MILLIS = 1000;
 
     /** Disable instantiation. */
     private Utility() {}
@@ -46,6 +49,20 @@ public class Utility {
         } catch (SocketException e) {
             // Could not connect.
             return false;
+        }
+    }
+
+    public static void retry(int times, Callable<Boolean> callable) {
+        for (int i = 0; i < times; i++) {
+            try {
+                callable.call();
+            } catch (IOException e) {
+                try {
+                    Thread.sleep(RETRY_LOGIC_SLEEP_MILLIS);
+                } catch (InterruptedException ignore) { Thread.currentThread().interrupt(); }
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
         }
     }
 
